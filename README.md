@@ -8,7 +8,7 @@ Helm chart, admission policies and identity setup for
 |---|---|
 | `charts/gjallar` | The chart: every component is its own pod; every feature is a value you can turn off |
 | `charts/gjallar/values-kind.yaml` | One-node profile (one replica each, small requests) for kind or a homelab |
-| `policies/kyverno` | Kyverno ≥ 1.16 `ValidatingPolicy`: admission gate (urgent / known-exploited images) and baseline. Audit mode and `failurePolicy: Ignore` by default |
+| `policies/kyverno` | Kyverno ≥ 1.16 `ValidatingPolicy`: admission gate (urgent / known-exploited images) and baseline. Audit mode and `failurePolicy: Ignore` by default. Using OPA, Conftest or Gatekeeper instead? See [gjallar-opa](https://github.com/heimdallr-dev/gjallar-opa) |
 | `keycloak/gjallar-realm.json` | Realm with roles, groups claim and audience; works as a template for any OIDC provider |
 | `keycloak/keycloak-dev.yaml` | Throwaway dev Keycloak for local clusters (not for production) |
 
