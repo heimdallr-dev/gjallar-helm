@@ -15,8 +15,32 @@ data:
       store_dir: /data
       max_file_store: {{ .Values.nats.storage | replace "Gi" "G" }}
     }
+    {{- if eq .Values.nats.auth "users" }}
+    # Services share user "gjallar". Agents (also from other clusters) get user
+    # "agent": they can report inventory and runtime data and read SBOMs, but
+    # cannot queue jobs, forge results or change streams. A leaked agent
+    # password therefore cannot steer the hub. Same list as core's
+    # internal/adapters/natsbus/testdata/users.conf (tested there).
+    authorization {
+      users: [
+        { user: gjallar, password: $GJALLAR_NATS_TOKEN }
+        { user: agent, password: $GJALLAR_NATS_AGENT_PASSWORD, permissions: {
+            publish: { allow: [
+              "gjallar.inventory.>", "gjallar.events.runtime", "$KV.gjallar-runtime.>",
+              "$JS.API.STREAM.INFO.KV_gjallar-runtime", "$JS.API.STREAM.INFO.OBJ_gjallar-sboms",
+              "$JS.API.DIRECT.GET.KV_gjallar-runtime.>", "$JS.API.STREAM.MSG.GET.KV_gjallar-runtime",
+              "$JS.API.DIRECT.GET.OBJ_gjallar-sboms.>", "$JS.API.STREAM.MSG.GET.OBJ_gjallar-sboms",
+              "$JS.API.CONSUMER.CREATE.OBJ_gjallar-sboms", "$JS.API.CONSUMER.CREATE.OBJ_gjallar-sboms.>",
+              "$JS.API.CONSUMER.DELETE.OBJ_gjallar-sboms.>", "$JS.FC.OBJ_gjallar-sboms.>"
+            ] }
+            subscribe: { allow: ["_INBOX_agent.>"] }
+        } }
+      ]
+    }
+    {{- else }}
     # Every client must present the token (Secret {{ include "gj.natsSecret" . }}).
     authorization { token: $GJALLAR_NATS_TOKEN }
+    {{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -53,6 +77,8 @@ spec:
           env:
             - name: GJALLAR_NATS_TOKEN
               valueFrom: { secretKeyRef: { name: {{ include "gj.natsSecret" . }}, key: token } }
+            - name: GJALLAR_NATS_AGENT_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ include "gj.natsSecret" . }}, key: agent-password, optional: true } }
           ports:
             - { containerPort: 4222, name: client }
             - { containerPort: 8222, name: monitor }

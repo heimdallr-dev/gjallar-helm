@@ -25,7 +25,9 @@ nats:
   storage: 10Gi
   storageClass: ""
   externalUrl: ""              # set when enabled=false (or for a remote leaf node hub)
-  tokenSecret: ""              # Secret with key "token" for NATS auth; empty = generated (<release>-nats). Spokes reuse the hub's token
+  auth: users                  # users: services and agents get separate NATS users (agents can only report); token: one shared token (old behaviour, or an external NATS)
+  tokenSecret: ""              # Secret with keys "token" (services) and "agent-password" (agents); empty = generated (<release>-nats). Spokes copy only agent-password
+  caSecret: ""                 # Secret with key ca.crt when the NATS URL is tls:// (e.g. a remote hub for spoke agents)
   resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { memory: 1Gi } }
 
 # ---- Operational database ----------------------------------------------

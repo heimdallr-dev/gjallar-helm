@@ -87,7 +87,7 @@ spec:
           image: {{ include "gj.image" (dict "root" . "name" "agent") }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
-            {{- include "gj.commonEnv" . | nindent 12 }}
+            {{- include "gj.agentEnv" . | nindent 12 }}
             - { name: OTEL_SERVICE_NAME, value: gjallar-agent }
             - { name: GJALLAR_CLUSTER, value: {{ .Values.cluster.name | quote }} }
             - { name: GJALLAR_INTERVAL, value: {{ .Values.agent.interval | quote }} }
@@ -104,6 +104,14 @@ spec:
           ports: [{ containerPort: 9090, name: metrics }]
           securityContext: {{- include "gj.containerSecurity" . | nindent 12 }}
           resources: {{- toYaml (ternary .Values.agent.runtime.resources .Values.agent.resources (or .Values.agent.runtime.enabled .Values.agent.regolibrary.enabled)) | nindent 12 }}
-          volumeMounts: [{ name: tmp, mountPath: /tmp }]   # OPA bundle, kubectl-gadget cache
-      volumes: [{ name: tmp, emptyDir: { sizeLimit: 256Mi } }]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }   # OPA bundle, kubectl-gadget cache
+            {{- if .Values.nats.caSecret }}
+            - { name: nats-ca, mountPath: /etc/gjallar/nats-ca, readOnly: true }
+            {{- end }}
+      volumes:
+        - { name: tmp, emptyDir: { sizeLimit: 256Mi } }
+        {{- with .Values.nats.caSecret }}
+        - { name: nats-ca, secret: { secretName: {{ . }} } }
+        {{- end }}
 {{- end }}

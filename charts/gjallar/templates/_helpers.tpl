@@ -35,11 +35,33 @@ app.kubernetes.io/component: {{ .component }}
 {{- define "gj.natsSecret" -}}
 {{- .Values.nats.tokenSecret | default (printf "%s-nats" (include "gj.fullname" .)) -}}
 {{- end -}}
+{{/* Services: full bus access (user "gjallar", or the shared token in auth=token mode). */}}
 {{- define "gj.commonEnv" -}}
-- name: GJALLAR_NATS_URL
-  value: {{ include "gj.natsUrl" . | quote }}
+{{- if eq .Values.nats.auth "users" }}
+- { name: GJALLAR_NATS_USER, value: gjallar }
+{{- end }}
 - name: GJALLAR_NATS_TOKEN
   valueFrom: { secretKeyRef: { name: {{ include "gj.natsSecret" . }}, key: token, optional: true } }
+{{ include "gj.baseEnv" . }}
+{{- end -}}
+{{/* Agents: user "agent", limited to inventory and runtime data (templates/nats.yaml). */}}
+{{- define "gj.agentEnv" -}}
+{{- if eq .Values.nats.auth "users" }}
+- { name: GJALLAR_NATS_USER, value: agent }
+- name: GJALLAR_NATS_PASSWORD
+  valueFrom: { secretKeyRef: { name: {{ include "gj.natsSecret" . }}, key: agent-password, optional: true } }
+{{- else }}
+- name: GJALLAR_NATS_TOKEN
+  valueFrom: { secretKeyRef: { name: {{ include "gj.natsSecret" . }}, key: token, optional: true } }
+{{- end }}
+{{- if .Values.nats.caSecret }}
+- { name: GJALLAR_NATS_CA, value: /etc/gjallar/nats-ca/ca.crt }
+{{- end }}
+{{ include "gj.baseEnv" . }}
+{{- end -}}
+{{- define "gj.baseEnv" -}}
+- name: GJALLAR_NATS_URL
+  value: {{ include "gj.natsUrl" . | quote }}
 - name: GJALLAR_LOG_LEVEL
   value: {{ .Values.observability.logLevel | quote }}
 {{- with .Values.observability.otlpEndpoint }}
