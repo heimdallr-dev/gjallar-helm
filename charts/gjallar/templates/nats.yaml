@@ -1,0 +1,77 @@
+{{- if .Values.nats.enabled }}
+{{- $c := dict "root" . "component" "nats" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gj.fullname" . }}-nats
+  labels: {{- include "gj.labels" . | nindent 4 }}
+data:
+  nats.conf: |
+    port: 4222
+    http_port: 8222
+    server_name: gjallar-nats
+    max_payload: 8MB
+    jetstream {
+      store_dir: /data
+      max_file_store: {{ .Values.nats.storage | replace "Gi" "G" }}
+    }
+    # Every client must present the token (Secret {{ include "gj.natsSecret" . }}).
+    authorization { token: $GJALLAR_NATS_TOKEN }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gj.fullname" . }}-nats
+  labels: {{- include "gj.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "gj.selector" $c | nindent 4 }}
+  ports:
+    - { name: client, port: 4222, targetPort: 4222 }
+    - { name: monitor, port: 8222, targetPort: 8222 }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "gj.fullname" . }}-nats
+  labels: {{- include "gj.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "gj.fullname" . }}-nats
+  replicas: 1
+  selector:
+    matchLabels: {{- include "gj.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "gj.selector" $c | nindent 8 }}
+      annotations:
+        checksum/config: {{ .Values.nats | toJson | sha256sum }}
+    spec:
+      securityContext: {{- include "gj.podSecurity" . | nindent 8 }}
+      containers:
+        - name: nats
+          image: {{ .Values.nats.image }}
+          args: ["-c", "/etc/nats/nats.conf"]
+          env:
+            - name: GJALLAR_NATS_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ include "gj.natsSecret" . }}, key: token } }
+          ports:
+            - { containerPort: 4222, name: client }
+            - { containerPort: 8222, name: monitor }
+          readinessProbe: { httpGet: { path: /healthz, port: 8222 }, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: "/healthz?js-enabled-only=true", port: 8222 }, periodSeconds: 30 }
+          securityContext: {{- include "gj.containerSecurity" . | nindent 12 }}
+          resources: {{- toYaml .Values.nats.resources | nindent 12 }}
+          volumeMounts:
+            - { name: config, mountPath: /etc/nats }
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: config
+          configMap: { name: {{ include "gj.fullname" . }}-nats }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with .Values.nats.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources: { requests: { storage: {{ .Values.nats.storage }} } }
+{{- end }}

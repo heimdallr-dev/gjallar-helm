@@ -1,0 +1,63 @@
+{{- if or .Values.buildkit.enabled .Values.workers.patch.enabled }}
+{{- $c := dict "root" . "component" "buildkit" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gj.fullname" . }}-buildkit
+  labels: {{- include "gj.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "gj.selector" $c | nindent 4 }}
+  ports: [{ name: buildkit, port: 1234, targetPort: 1234 }]
+---
+{{- with .Values.buildkit.config }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gj.fullname" $ }}-buildkit
+  labels: {{- include "gj.labels" $ | nindent 4 }}
+data:
+  buildkitd.toml: {{ . | quote }}
+---
+{{- end }}
+# Rootless BuildKit for Copa. Rootless still needs unconfined seccomp/AppArmor
+# to create user namespaces; keep it isolated (own node pool or namespace)
+# and reachable only from the patch worker (see networkPolicy).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gj.fullname" . }}-buildkit
+  labels: {{- include "gj.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- include "gj.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "gj.selector" $c | nindent 8 }}
+      annotations:
+        container.apparmor.security.beta.kubernetes.io/buildkitd: unconfined
+    spec:
+      containers:
+        - name: buildkitd
+          image: {{ .Values.buildkit.image }}
+          args: ["--addr", "tcp://0.0.0.0:1234", "--oci-worker-no-process-sandbox"{{ if .Values.buildkit.config }}, "--config", "/etc/buildkit/buildkitd.toml"{{ end }}]
+          ports: [{ containerPort: 1234, name: buildkit }]
+          readinessProbe: { exec: { command: ["buildctl", "--addr", "tcp://127.0.0.1:1234", "debug", "workers"] }, periodSeconds: 30 }
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile: { type: Unconfined }
+          resources: {{- toYaml .Values.buildkit.resources | nindent 12 }}
+          volumeMounts:
+            - { name: state, mountPath: /home/user/.local/share/buildkit }
+            {{- if .Values.buildkit.config }}
+            - { name: config, mountPath: /etc/buildkit, readOnly: true }
+            {{- end }}
+      volumes:
+        - name: state
+          emptyDir: { sizeLimit: 20Gi }
+        {{- if .Values.buildkit.config }}
+        - name: config
+          configMap: { name: {{ include "gj.fullname" . }}-buildkit }
+        {{- end }}
+{{- end }}

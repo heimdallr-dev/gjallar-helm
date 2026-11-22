@@ -1,0 +1,232 @@
+# Gjallar Helm values. Every component is its own pod; turn pieces on/off here.
+
+image:
+  registry: ghcr.io/heimdallr-dev     # where `make push REGISTRY=...` put the images
+  tag: ""                      # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+cluster:
+  name: homelab                # label for this cluster in findings
+
+# ---- Identity (Keycloak) ------------------------------------------------
+auth:
+  # Empty issuer = authentication DISABLED (dev only).
+  issuer: ""                   # e.g. https://keycloak.example.com/realms/gjallar
+  clientId: gjallar            # audience the API expects
+  webClientId: gjallar-web     # public PKCE client used by the browser
+  adminRole: gjallar-admin
+  viewerRole: ""               # empty = any authenticated user can read
+
+# ---- Messaging ------------------------------------------------------------
+nats:
+  enabled: true                # single-node JetStream; use the official NATS chart for a 3-node cluster
+  image: nats:2.11.6-alpine
+  storage: 10Gi
+  storageClass: ""
+  externalUrl: ""              # set when enabled=false (or for a remote leaf node hub)
+  tokenSecret: ""              # Secret with key "token" for NATS auth; empty = generated (<release>-nats). Spokes reuse the hub's token
+  resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { memory: 1Gi } }
+
+# ---- Operational database ----------------------------------------------
+postgresql:
+  enabled: true                # simple StatefulSet; for production prefer CloudNativePG and set externalUrl
+  image: postgres:17-alpine
+  storage: 10Gi
+  storageClass: ""
+  database: gjallar
+  username: gjallar
+  password: ""                 # generated on first install if empty
+  existingSecret: ""           # secret with key DATABASE_URL to use an external Postgres
+  resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 1Gi } }
+
+# ---- Vulnerability DB mirror (Option A: mirror Anchore's daily DB) -------
+grypeDB:
+  enabled: true
+  image: quay.io/kubescape/grype-offline-db:v6-latest
+  pullPolicy: Always           # the daily refresh restarts it to pull the newest DB
+  updateUrl: ""                # override: point workers at another mirror
+  resources: { requests: { cpu: 10m, memory: 64Mi }, limits: { memory: 256Mi } }
+
+# ---- Core API + hub -----------------------------------------------------
+api:
+  replicas: 2
+  admissionOpen: true          # /api/v1/admission without a token, for Kyverno (keep networkPolicy on)
+  resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { memory: 512Mi } }
+
+# ---- Multi-tenancy: Keycloak groups → namespaces ----------------------------
+# Empty = everyone sees everything. Scoped users only see findings, images,
+# workloads, posture, licenses and patches in their namespaces; analytics SQL
+# is fleet-wide and needs a global role. The realm's "groups" mapper puts
+# group names in tokens.
+tenancy:
+  groups: {}                   # e.g. { team-shop: [shop, shop-staging], team-pay: [payments] }
+  globalRoles: [gjallar-admin] # roles that see every namespace
+
+# ---- Notifications (Slack, Teams, generic JSON webhooks) --------------------
+# A Secret holds the targets (webhook URLs are credentials), key GJALLAR_NOTIFY:
+#   [{"name":"shop","url":"https://hooks.slack.com/...","format":"slack","namespaces":["shop"],"min_band":"urgent","kev":true},
+#    {"name":"secops","url":"https://...webhook.office.com/...","format":"teams","min_band":"high"}]
+# Each finding is sent once per target (NATS KV ledger, 90 days).
+notify:
+  existingSecret: ""
+  secretKey: GJALLAR_NOTIFY
+  publicUrl: ""                # UI link in messages, e.g. https://gjallar.example.com
+
+# ---- Registry discovery: scan images pushed to Harbor before they run --------
+discovery:
+  interval: 1h
+  harbor:
+    url: ""                    # https://harbor.example.com
+    projects: []               # [apps, platform]
+    maxPerRepo: 20             # newest tagged artifacts per repository
+    existingSecret: ""         # keys: username, password (a robot account with pull + list)
+  # Any OCI Distribution registry (registry:2, Zot, GHCR, Quay, GitLab, Gitea, Artifactory...).
+  registry:
+    url: ""                    # https://ghcr.io
+    repositories: []           # e.g. [myorg/web, myorg/api]; empty = /v2/_catalog (not offered by GHCR/Docker Hub)
+    maxTags: 20
+    existingSecret: ""         # keys: username, password (or token as password)
+
+# ---- Engines (each a scale-to-zero worker) --------------------------------
+workers:
+  registryAuthSecret: ""       # dockerconfigjson secret so Syft/Copa can pull private images (e.g. Harbor)
+  sbom:
+    enabled: true
+    replicas: 1
+    concurrency: 2
+    source: registry           # registry | docker | podman | containerd
+    scope: ""                  # "" (squashed) | all-layers
+    # Sign each SBOM as a cosign attestation in the image's registry, for
+    # images whose repository starts with one of these prefixes (needs push
+    # rights there, via workers.registryAuthSecret). Key: `cosign generate-key-pair`,
+    # stored in a Secret with keys cosign.key and cosign.password.
+    attest:
+      repositories: []         # e.g. [harbor.example.com/apps/]
+      keySecret: ""
+      insecure: false          # plain-HTTP registries (labs only)
+    resources: { requests: { cpu: 250m, memory: 512Mi }, limits: { memory: 3Gi } }
+  vuln:
+    enabled: true
+    replicas: 1
+    concurrency: 2
+    resources: { requests: { cpu: 250m, memory: 512Mi }, limits: { memory: 2Gi } }
+  license:
+    enabled: true
+    replicas: 1
+    concurrency: 4
+    grantConfig: ""            # optional .grant.yaml content; when set, Grant runs as a second opinion
+    policy:                    # SPDX allow/deny ("*" suffix glob). Deny wins.
+      allow: []
+      deny: ["AGPL-*", "GPL-*", "SSPL-*"]
+    resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { memory: 256Mi } }
+  patch:
+    enabled: false             # needs BuildKit + push rights to your registry
+    replicas: 1
+    concurrency: 1
+    tagSuffix: -patched
+    push: true
+    trivyDBRepository: ""      # internal mirror of the Trivy DB (air-gapped); default pulls mirror.gcr.io / ghcr.io
+    timeout: 20m               # copa --timeout; its 5m default fails on images with many OS updates
+    targetRepository: ""       # e.g. harbor.example.com/gjallar; "" = push next to the source (fails for public images)
+    resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 1Gi } }
+
+buildkit:
+  enabled: false               # turned on automatically when workers.patch.enabled
+  image: moby/buildkit:v0.35.1-rootless
+  config: ""                   # optional buildkitd.toml, e.g. '[registry."registry.local:5000"]\n  http = true' for an internal plain-HTTP registry
+  resources: { requests: { cpu: 250m, memory: 512Mi }, limits: { memory: 4Gi } }
+
+keda:
+  enabled: false               # requires KEDA; scales workers 0→N on JetStream lag
+  minReplicas: 0
+  maxReplicas: 10
+  lagThreshold: "5"
+
+# ---- Analytics (Arrow / DuckDB / Parquet / DuckLake) -----------------------
+analytics:
+  enabled: true
+  mode: parquet                # parquet (PVC or S3) | ducklake (catalog in Postgres, data in S3)
+  storage: 20Gi
+  storageClass: ""
+  flushInterval: 30s
+  retainSnapshots: 720h
+  s3:                          # for s3:// data paths (Ceph RGW, MinIO, SeaweedFS...)
+    dataPath: ""               # e.g. s3://gjallar-lake/
+    endpoint: ""               # e.g. rook-ceph-rgw.rook-ceph.svc:80
+    region: us-east-1
+    useSSL: false
+    existingSecret: ""         # keys: access-key, secret-key
+  resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 2Gi } }
+
+# ---- Interfaces ------------------------------------------------------------
+web:
+  enabled: true
+  resources: { requests: { cpu: 10m, memory: 32Mi }, limits: { memory: 128Mi } }
+mcp:
+  enabled: true
+  publicUrl: ""                # https://gjallar-mcp.example.com/mcp (for OAuth resource metadata)
+  resources: { requests: { cpu: 10m, memory: 32Mi }, limits: { memory: 128Mi } }
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  web: { host: gjallar.example.com }
+  mcp: { host: "" }            # empty = /mcp on the web host
+  tls: []                      # [{ secretName: gjallar-tls, hosts: [gjallar.example.com] }]
+
+# ---- Cluster agent ---------------------------------------------------------
+agent:
+  enabled: true
+  interval: 5m
+  skipNamespaces: [kube-system]
+  resources: { requests: { cpu: 20m, memory: 32Mi }, limits: { memory: 128Mi } }
+  # Runtime reachability: which packages actually load (Inspektor Gadget trace_open).
+  # Install Inspektor Gadget first (`kubectl gadget deploy`). Loaded packages score
+  # x1.0, never-loaded x0.3; images without data stay neutral (x0.8).
+  # Kubescape's open regolibrary controls (C-xxxx, ~130 workload rules) run
+  # through OPA on every inventory pass, next to the built-in GJ checks.
+  regolibrary:
+    enabled: false
+  runtime:
+    enabled: false
+    gadget: trace_open:v0.58.0    # keep in step with the deployed Inspektor Gadget version
+    gadgetNamespace: gadget
+    flush: 1m
+    resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { memory: 512Mi } }
+
+# ---- Scheduled jobs --------------------------------------------------------
+cronjobs:
+  dbRefresh:                   # refresh Grype DB mirror, then re-match every stored SBOM
+    enabled: true
+    schedule: "17 3 * * *"
+  analyticsMaintain:           # daily snapshot + Parquet compaction + snapshot expiry
+    enabled: true
+    schedule: "41 2 * * *"
+  backup:                      # pg_dump to a PVC, keeps N days
+    enabled: false
+    schedule: "23 1 * * *"
+    keepDays: 7
+    storage: 5Gi
+  vunnel:                      # Option B: build the Grype DB yourself (experimental, ~100 GB)
+    enabled: false
+    schedule: "7 1 * * *"
+    image: ghcr.io/heimdallr-dev/gjallar-vunnel:gjallar-v0.68.0   # github.com/heimdallr-dev/gjallar-vunnel
+    providers: "nvd alpine debian ubuntu rhel github"
+    storage: 100Gi
+    nvdApiKeySecret: ""        # secret with key NVD_API_KEY
+
+# ---- Observability ---------------------------------------------------------
+observability:
+  otlpEndpoint: ""             # e.g. http://otel-collector.observability:4318 or Tempo's OTLP HTTP
+  logLevel: info
+  serviceMonitor: false        # Prometheus Operator ServiceMonitor
+  grafanaDashboard: true       # ConfigMap labelled grafana_dashboard=1 (Grafana sidecar)
+
+networkPolicy:
+  enabled: false               # recommended with Cilium/Calico
+  kyvernoNamespace: kyverno    # allowed to call /api/v1/admission
+
+podSecurity:
+  runAsNonRoot: true

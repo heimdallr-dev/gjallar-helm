@@ -1,0 +1,202 @@
+{{- $cj := .Values.cronjobs }}
+{{- if and $cj.dbRefresh.enabled .Values.grypeDB.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "gj.fullname" . }}-ops
+  labels: {{- include "gj.labels" . | nindent 4 }}
+---
+# Only permission: restart the Grype DB mirror deployment in this namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "gj.fullname" . }}-ops
+  labels: {{- include "gj.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [{{ include "gj.fullname" . }}-grype-db]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "gj.fullname" . }}-ops
+  labels: {{- include "gj.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "gj.fullname" . }}-ops }
+subjects: [{ kind: ServiceAccount, name: {{ include "gj.fullname" . }}-ops }]
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "gj.fullname" . }}-db-refresh
+  labels: {{- include "gj.labels" . | nindent 4 }}
+spec:
+  schedule: {{ $cj.dbRefresh.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        metadata:
+          labels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: job }
+        spec:
+          serviceAccountName: {{ include "gj.fullname" . }}-ops
+          restartPolicy: OnFailure
+          {{- include "gj.pullSecrets" . | nindent 10 }}
+          securityContext: {{- include "gj.podSecurity" . | nindent 12 }}
+          containers:
+            - name: refresh
+              image: {{ include "gj.image" (dict "root" . "name" "cli") }}
+              args: ["ops", "refresh-db",
+                     "--deployment", "{{ include "gj.fullname" . }}-grype-db",
+                     "--mirror-url", "http://{{ include "gj.fullname" . }}-grype-db:8080/databases/v6/latest.json"]
+              env: {{- include "gj.commonEnv" . | nindent 16 }}
+              securityContext: {{- include "gj.containerSecurity" . | nindent 16 }}
+              resources: { requests: { cpu: 10m, memory: 32Mi }, limits: { memory: 128Mi } }
+{{- end }}
+{{- if and $cj.analyticsMaintain.enabled .Values.analytics.enabled }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "gj.fullname" . }}-analytics-maintain
+  labels: {{- include "gj.labels" . | nindent 4 }}
+spec:
+  schedule: {{ $cj.analyticsMaintain.schedule | quote }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: job }
+        spec:
+          restartPolicy: OnFailure
+          {{- include "gj.pullSecrets" . | nindent 10 }}
+          securityContext: {{- include "gj.podSecurity" . | nindent 12 }}
+          {{- if not .Values.analytics.s3.dataPath }}
+          # Same RWO volume as the analytics pod: schedule next to it.
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels: {{- include "gj.selector" (dict "root" . "component" "analytics") | nindent 22 }}
+                  topologyKey: kubernetes.io/hostname
+          {{- end }}
+          containers:
+            - name: maintain
+              image: {{ include "gj.image" (dict "root" . "name" "analytics") }}
+              args: ["maintain"]
+              env: {{- include "gj.analyticsEnv" . | nindent 16 }}
+              securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+              resources: {{- toYaml .Values.analytics.resources | nindent 16 }}
+              volumeMounts:
+                - { name: tmp, mountPath: /tmp }
+                {{- if not .Values.analytics.s3.dataPath }}
+                - { name: lake, mountPath: /data/lake }
+                {{- end }}
+          volumes:
+            - name: tmp
+              emptyDir: {}
+            {{- if not .Values.analytics.s3.dataPath }}
+            - name: lake
+              persistentVolumeClaim: { claimName: {{ include "gj.fullname" . }}-lake }
+            {{- end }}
+{{- end }}
+{{- if and $cj.backup.enabled .Values.postgresql.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "gj.fullname" . }}-backup
+  labels: {{- include "gj.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources: { requests: { storage: {{ $cj.backup.storage }} } }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "gj.fullname" . }}-backup
+  labels: {{- include "gj.labels" . | nindent 4 }}
+spec:
+  schedule: {{ $cj.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: job }
+        spec:
+          restartPolicy: OnFailure
+          securityContext: { runAsNonRoot: true, runAsUser: 70, fsGroup: 70, seccompProfile: { type: RuntimeDefault } }
+          containers:
+            - name: pgdump
+              image: {{ .Values.postgresql.image }}
+              command: ["/bin/sh", "-c"]
+              args:
+                - set -eu;
+                  f=/backup/gjallar-$(date -u +%Y%m%dT%H%M%SZ).sql.gz;
+                  pg_dump "$DATABASE_URL" | gzip > "$f";
+                  echo "wrote $f";
+                  find /backup -name 'gjallar-*.sql.gz' -mtime +{{ $cj.backup.keepDays }} -delete
+              env:
+                - name: DATABASE_URL
+                  valueFrom: { secretKeyRef: { name: {{ include "gj.dbSecret" . }}, key: DATABASE_URL } }
+              securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+              volumeMounts: [{ name: backup, mountPath: /backup }]
+          volumes:
+            - name: backup
+              persistentVolumeClaim: { claimName: {{ include "gj.fullname" . }}-backup }
+{{- end }}
+{{- if $cj.vunnel.enabled }}
+---
+# Option B: build the Grype DB yourself (gjallar-vunnel image). Output lands
+# on a PVC under out/databases/v6/; serve out/ with any static web server and
+# set grypeDB.updateUrl to http://<server>/databases. Needs RWX storage (e.g. CephFS) to share the volume.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "gj.fullname" . }}-vunnel
+  labels: {{- include "gj.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteMany]
+  resources: { requests: { storage: {{ $cj.vunnel.storage }} } }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "gj.fullname" . }}-vunnel
+  labels: {{- include "gj.labels" . | nindent 4 }}
+spec:
+  schedule: {{ $cj.vunnel.schedule | quote }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 21600
+      template:
+        metadata:
+          labels: { app.kubernetes.io/instance: {{ .Release.Name }}, app.kubernetes.io/component: job }
+        spec:
+          restartPolicy: OnFailure
+          securityContext: { runAsNonRoot: true, runAsUser: 65532, fsGroup: 65532 }
+          containers:
+            - name: build
+              # gjallar-vunnel: Vunnel + grype-db pinned and checksum-verified at build time (nothing installed at runtime).
+              image: {{ $cj.vunnel.image }}
+              env:
+                - { name: PROVIDERS, value: {{ $cj.vunnel.providers | quote }} }
+                - { name: OUT, value: /data/out }
+              {{- with $cj.vunnel.nvdApiKeySecret }}
+                - name: NVD_API_KEY
+                  valueFrom: { secretKeyRef: { name: {{ . }}, key: NVD_API_KEY } }
+              {{- end }}
+              resources: { requests: { cpu: "2", memory: 4Gi }, limits: { memory: 8Gi } }
+              volumeMounts: [{ name: data, mountPath: /data }]
+          volumes:
+            - name: data
+              persistentVolumeClaim: { claimName: {{ include "gj.fullname" . }}-vunnel }
+{{- end }}

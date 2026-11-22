@@ -1,0 +1,184 @@
+{
+  "realm": "gjallar",
+  "enabled": true,
+  "displayName": "Gjallar",
+  "sslRequired": "external",
+  "roles": {
+    "realm": [
+      {
+        "name": "gjallar-admin",
+        "description": "Queue scans and patches, accept risks"
+      },
+      {
+        "name": "gjallar-viewer",
+        "description": "Read findings, posture, licenses and analytics"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "gjallar",
+      "name": "Gjallar API (audience only)",
+      "enabled": true,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false
+    },
+    {
+      "clientId": "gjallar-web",
+      "name": "Gjallar web UI",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://localhost:8083/*",
+        "https://gjallar.example.com/*"
+      ],
+      "webOrigins": [
+        "+"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "+"
+      },
+      "protocolMappers": [
+        {
+          "name": "gjallar-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "gjallar",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "gjallar-cli",
+      "name": "Gjallar CLI (device flow)",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "attributes": {
+        "oauth2.device.authorization.grant.enabled": "true"
+      },
+      "protocolMappers": [
+        {
+          "name": "gjallar-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "gjallar",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "gjallar-mcp",
+      "name": "Gjallar MCP clients",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "redirectUris": [
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocolMappers": [
+        {
+          "name": "gjallar-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "gjallar",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "email": "admin@gjallar.local",
+      "emailVerified": true,
+      "firstName": "Gjallar",
+      "lastName": "Admin",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "change-me-admin",
+          "temporary": true
+        }
+      ],
+      "realmRoles": [
+        "gjallar-admin",
+        "gjallar-viewer"
+      ]
+    },
+    {
+      "username": "viewer",
+      "enabled": true,
+      "email": "viewer@gjallar.local",
+      "emailVerified": true,
+      "firstName": "Gjallar",
+      "lastName": "Viewer",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "change-me-viewer",
+          "temporary": true
+        }
+      ],
+      "realmRoles": [
+        "gjallar-viewer"
+      ]
+    }
+  ]
+}

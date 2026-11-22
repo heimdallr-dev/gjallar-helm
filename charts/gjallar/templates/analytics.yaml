@@ -1,0 +1,72 @@
+{{- if .Values.analytics.enabled }}
+{{- $c := dict "root" . "component" "analytics" }}
+{{- $s3 := .Values.analytics.s3 }}
+{{- $local := not $s3.dataPath }}
+{{- if and (eq .Values.analytics.mode "ducklake") $local }}{{ fail "analytics.mode=ducklake needs analytics.s3.dataPath (Parquet data on S3/Ceph RGW)" }}{{ end }}
+{{- if $local }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "gj.fullname" . }}-lake
+  labels: {{- include "gj.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.analytics.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources: { requests: { storage: {{ .Values.analytics.storage }} } }
+---
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gj.fullname" . }}-analytics
+  labels: {{- include "gj.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "gj.selector" $c | nindent 4 }}
+  ports: [{ name: http, port: 8081, targetPort: 8081 }, { name: flight, port: 8815, targetPort: 8815 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gj.fullname" . }}-analytics
+  labels: {{- include "gj.labels" . | nindent 4 }}
+spec:
+  replicas: 1   # single writer by design (see docs/analytics.md)
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: {{- include "gj.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "gj.selector" $c | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8081"
+    spec:
+      {{- include "gj.pullSecrets" . | nindent 6 }}
+      securityContext: {{- include "gj.podSecurity" . | nindent 8 }}
+      containers:
+        - name: analytics
+          image: {{ include "gj.image" (dict "root" . "name" "analytics") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["serve"]
+          env: {{- include "gj.analyticsEnv" . | nindent 12 }}
+          ports: [{ containerPort: 8081, name: http }, { containerPort: 8815, name: flight }]
+          readinessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10 }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+          resources: {{- toYaml .Values.analytics.resources | nindent 12 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            {{- if $local }}
+            - { name: lake, mountPath: /data/lake }
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if $local }}
+        - name: lake
+          persistentVolumeClaim: { claimName: {{ include "gj.fullname" . }}-lake }
+        {{- end }}
+{{- end }}

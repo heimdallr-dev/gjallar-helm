@@ -1,0 +1,54 @@
+{{- range $name := list "web" "mcp" }}
+{{- $v := index $.Values $name }}
+{{- if $v.enabled }}
+{{- $c := dict "root" $ "component" $name }}
+{{- $port := ternary 8083 8082 (eq $name "web") }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gj.fullname" $ }}-{{ $name }}
+  labels: {{- include "gj.labels" $ | nindent 4 }}
+spec:
+  selector: {{- include "gj.selector" $c | nindent 4 }}
+  ports: [{ name: http, port: {{ $port }}, targetPort: {{ $port }} }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gj.fullname" $ }}-{{ $name }}
+  labels: {{- include "gj.labels" $ | nindent 4 }}
+spec:
+  replicas: {{ (index $.Values $name).replicas | default 2 }}
+  selector:
+    matchLabels: {{- include "gj.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "gj.selector" $c | nindent 8 }}
+    spec:
+      {{- include "gj.pullSecrets" $ | nindent 6 }}
+      securityContext: {{- include "gj.podSecurity" $ | nindent 8 }}
+      containers:
+        - name: {{ $name }}
+          image: {{ include "gj.image" (dict "root" $ "name" $name) }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          env:
+            - { name: GJALLAR_API_URL, value: "http://{{ include "gj.fullname" $ }}-api:8080" }
+            - { name: OTEL_SERVICE_NAME, value: "gjallar-{{ $name }}" }
+            {{- with $.Values.observability.otlpEndpoint }}
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ . | quote }} }
+            {{- end }}
+            {{- with $.Values.auth.issuer }}
+            - { name: GJALLAR_OIDC_ISSUER, value: {{ . | quote }} }
+            {{- end }}
+            {{- if eq $name "web" }}
+            - { name: GJALLAR_OIDC_WEB_CLIENT_ID, value: {{ $.Values.auth.webClientId | quote }} }
+            {{- else if $.Values.mcp.publicUrl }}
+            - { name: GJALLAR_MCP_PUBLIC_URL, value: {{ $.Values.mcp.publicUrl | quote }} }
+            {{- end }}
+          ports: [{ containerPort: {{ $port }}, name: http }]
+          readinessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10 }
+          securityContext: {{- include "gj.containerSecurity" $ | nindent 12 }}
+          resources: {{- toYaml $v.resources | nindent 12 }}
+{{- end }}
+{{- end }}

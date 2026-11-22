@@ -1,0 +1,28 @@
+{{- if .Values.observability.grafanaDashboard }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gj.fullname" . }}-dashboard
+  labels:
+    {{- include "gj.labels" . | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  gjallar.json: |-
+{{ .Files.Get "files/gjallar-dashboard.json" | indent 4 }}
+{{- end }}
+{{- if .Values.observability.serviceMonitor }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "gj.fullname" . }}
+  labels: {{- include "gj.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels: { app.kubernetes.io/instance: {{ .Release.Name }} }
+    matchExpressions:
+      - { key: app.kubernetes.io/component, operator: In, values: [api, analytics, agent, worker-sbom, worker-vuln, worker-license, worker-patch] }
+  podMetricsEndpoints:
+    - { port: http, path: /metrics, interval: 30s }
+    - { port: metrics, path: /metrics, interval: 30s }
+{{- end }}

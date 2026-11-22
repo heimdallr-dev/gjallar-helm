@@ -1,0 +1,42 @@
+# Throwaway Keycloak for local clusters (kind): dev mode, in-memory DB,
+# realm imported from deploy/keycloak/gjallar-realm.json. NOT for production.
+#
+#   kubectl create ns keycloak
+#   kubectl -n keycloak create configmap gjallar-realm --from-file=deploy/keycloak/gjallar-realm.json
+#   kubectl apply -f deploy/keycloak/keycloak-dev.yaml
+#   helm upgrade gjallar deploy/helm/gjallar -n gjallar --reuse-values \
+#     --set auth.issuer=http://keycloak.keycloak.svc:8080/realms/gjallar
+#
+# Tokens carry iss=http://keycloak.keycloak.svc:8080/realms/gjallar, so
+# clients outside the cluster need that name to resolve (hosts file +
+# `kubectl -n keycloak port-forward svc/keycloak 8080`).
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: keycloak, namespace: keycloak }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: keycloak } }
+  template:
+    metadata: { labels: { app: keycloak } }
+    spec:
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:26.4
+          args: [start-dev, --import-realm]
+          env:
+            - { name: KC_BOOTSTRAP_ADMIN_USERNAME, value: admin }
+            - { name: KC_BOOTSTRAP_ADMIN_PASSWORD, value: admin }
+            - { name: KC_HOSTNAME, value: "http://keycloak.keycloak.svc:8080" }
+            - { name: KC_HEALTH_ENABLED, value: "true" }
+          ports: [{ containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /health/ready, port: 9000 }, periodSeconds: 10, failureThreshold: 60 }
+          volumeMounts: [{ name: realm, mountPath: /opt/keycloak/data/import }]
+          resources: { requests: { cpu: 100m, memory: 512Mi }, limits: { memory: 1536Mi } }
+      volumes: [{ name: realm, configMap: { name: gjallar-realm } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: keycloak, namespace: keycloak }
+spec:
+  selector: { app: keycloak }
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]

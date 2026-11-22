@@ -1,0 +1,45 @@
+# Block pods whose image Gjallar ranks urgent or that carry a CISA KEV CVE.
+# Starts in Audit mode: watch PolicyReports first, then switch to Deny.
+# Requires Kyverno >= 1.16 (CEL ValidatingPolicy; 1.20 dropped kyverno.io/v1
+# ClusterPolicy), api.admissionOpen=true and the API reachable from Kyverno
+# (networkPolicy.kyvernoNamespace). Unknown images are allowed and queued.
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: gjallar-block-urgent-images
+  annotations:
+    policies.kyverno.io/title: Block urgent / known-exploited images (Gjallar)
+    policies.kyverno.io/category: Supply Chain Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Asks Gjallar whether each container image has open findings ranked
+      urgent or listed in CISA KEV, and denies the pod if so.
+spec:
+  validationActions: [Audit]   # change to [Deny] when you trust the signal
+  failurePolicy: Ignore        # never block the cluster if Gjallar is down
+  webhookConfiguration: { timeoutSeconds: 10 }
+  evaluation:
+    background: { enabled: false }   # admission-time only: it calls the API
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  matchConditions:
+    - name: skip-system-namespaces
+      expression: "!(object.metadata.namespace in ['kube-system', 'gjallar', 'kyverno'])"
+  variables:
+    - name: images
+      expression: >-
+        object.spec.containers.map(c, c.image) +
+        (has(object.spec.initContainers) ? object.spec.initContainers.map(c, c.image) : [])
+    - name: blocked
+      expression: >-
+        variables.images.map(img, http.Get('http://gjallar-api.gjallar.svc:8080/api/v1/admission?image=' + img))
+          .filter(v, has(v.allowed) && v.allowed == false)
+  validations:
+    - expression: "size(variables.blocked) == 0"
+      messageExpression: >-
+        'Gjallar: blocked: ' + variables.blocked.map(v, string(v.reason)).join('; ') +
+        '. See the Risks page or run `gjallar findings --band urgent`.'

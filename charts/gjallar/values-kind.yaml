@@ -1,0 +1,11 @@
+# Small profile for a one-node dev cluster (kind on WSL, ~4 CPUs):
+# one replica each and lower CPU requests, so rolling updates fit.
+# scripts/kind-dev.sh uses it; production should keep the defaults.
+api: { replicas: 1, resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { memory: 512Mi } } }
+web: { replicas: 1 }
+mcp: { replicas: 1 }
+workers:
+  sbom:  { resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 3Gi } } }
+  vuln:  { resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 2Gi } } }
+  patch: { resources: { requests: { cpu: 50m, memory: 128Mi }, limits: { memory: 1Gi } } }
+buildkit: { resources: { requests: { cpu: 100m, memory: 256Mi }, limits: { memory: 4Gi } } }

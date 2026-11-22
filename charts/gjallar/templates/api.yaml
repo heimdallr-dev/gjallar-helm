@@ -1,0 +1,94 @@
+{{- $c := dict "root" . "component" "api" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gj.fullname" . }}-api
+  labels: {{- include "gj.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "gj.selector" $c | nindent 4 }}
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gj.fullname" . }}-api
+  labels: {{- include "gj.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicas }}
+  selector:
+    matchLabels: {{- include "gj.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "gj.selector" $c | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+    spec:
+      {{- include "gj.pullSecrets" . | nindent 6 }}
+      securityContext: {{- include "gj.podSecurity" . | nindent 8 }}
+      containers:
+        - name: api
+          image: {{ include "gj.image" (dict "root" . "name" "api") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            {{- include "gj.commonEnv" . | nindent 12 }}
+            - { name: OTEL_SERVICE_NAME, value: gjallar-api }
+            - name: GJALLAR_DATABASE_URL
+              valueFrom: { secretKeyRef: { name: {{ include "gj.dbSecret" . }}, key: DATABASE_URL } }
+            {{- if .Values.analytics.enabled }}
+            - { name: GJALLAR_ANALYTICS_URL, value: "http://{{ include "gj.fullname" . }}-analytics:8081" }
+            {{- end }}
+            {{- with .Values.auth.issuer }}
+            - { name: GJALLAR_OIDC_ISSUER, value: {{ . | quote }} }
+            {{- end }}
+            - { name: GJALLAR_OIDC_CLIENT_ID, value: {{ .Values.auth.clientId | quote }} }
+            - { name: GJALLAR_OIDC_ADMIN_ROLE, value: {{ .Values.auth.adminRole | quote }} }
+            - { name: GJALLAR_OIDC_VIEWER_ROLE, value: {{ .Values.auth.viewerRole | quote }} }
+            - { name: GJALLAR_ADMISSION_OPEN, value: {{ .Values.api.admissionOpen | quote }} }
+            - { name: GJALLAR_DISCOVERY_INTERVAL, value: {{ .Values.discovery.interval | quote }} }
+            {{- with .Values.tenancy.groups }}
+            - { name: GJALLAR_TENANTS, value: {{ toJson . | quote }} }
+            - { name: GJALLAR_TENANCY_GLOBAL_ROLES, value: {{ join "," $.Values.tenancy.globalRoles | quote }} }
+            {{- end }}
+            {{- with .Values.notify.existingSecret }}
+            - name: GJALLAR_NOTIFY
+              valueFrom: { secretKeyRef: { name: {{ . }}, key: {{ $.Values.notify.secretKey }} } }
+            {{- end }}
+            {{- with .Values.notify.publicUrl }}
+            - { name: GJALLAR_PUBLIC_URL, value: {{ . | quote }} }
+            {{- end }}
+            {{- if .Values.discovery.harbor.url }}
+            - { name: GJALLAR_HARBOR_URL, value: {{ .Values.discovery.harbor.url | quote }} }
+            - { name: GJALLAR_HARBOR_PROJECTS, value: {{ join "," .Values.discovery.harbor.projects | quote }} }
+            - { name: GJALLAR_HARBOR_MAX_PER_REPO, value: {{ .Values.discovery.harbor.maxPerRepo | quote }} }
+            - name: GJALLAR_HARBOR_USER
+              valueFrom: { secretKeyRef: { name: {{ .Values.discovery.harbor.existingSecret }}, key: username } }
+            - name: GJALLAR_HARBOR_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .Values.discovery.harbor.existingSecret }}, key: password } }
+            {{- end }}
+            {{- with .Values.discovery.registry }}{{ if .url }}
+            - { name: GJALLAR_REGISTRY_URL, value: {{ .url | quote }} }
+            - { name: GJALLAR_REGISTRY_REPOSITORIES, value: {{ join "," .repositories | quote }} }
+            - { name: GJALLAR_REGISTRY_MAX_TAGS, value: {{ .maxTags | quote }} }
+            {{- with .existingSecret }}
+            - name: GJALLAR_REGISTRY_USER
+              valueFrom: { secretKeyRef: { name: {{ . }}, key: username } }
+            - name: GJALLAR_REGISTRY_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ . }}, key: password } }
+            {{- end }}
+            {{- end }}{{ end }}
+          ports: [{ containerPort: 8080, name: http }]
+          readinessProbe: { httpGet: { path: /readyz, port: http }, periodSeconds: 10 }
+          livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 30 }
+          securityContext: {{- include "gj.containerSecurity" . | nindent 12 }}
+          resources: {{- toYaml .Values.api.resources | nindent 12 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "gj.fullname" . }}-api
+  labels: {{- include "gj.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {{- include "gj.selector" $c | nindent 6 }}

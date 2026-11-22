@@ -1,0 +1,43 @@
+{{- if .Values.networkPolicy.enabled }}
+{{- range $comp := list "nats" "postgres" "grype-db" "analytics" "api" }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gj.fullname" $ }}-{{ $comp }}
+  labels: {{- include "gj.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "gj.selector" (dict "root" $ "component" $comp) | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app.kubernetes.io/instance: {{ $.Release.Name }} }
+    {{- if eq $comp "api" }}
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ $.Values.networkPolicy.kyvernoNamespace }} } }
+    {{- end }}
+    {{- if or (eq $comp "nats") (eq $comp "api") (eq $comp "analytics") }}
+    - from:
+        - namespaceSelector: {}
+          podSelector: { matchLabels: { app.kubernetes.io/name: prometheus } }
+    {{- end }}
+{{- end }}
+{{- if or .Values.buildkit.enabled .Values.workers.patch.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "gj.fullname" . }}-buildkit
+  labels: {{- include "gj.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "gj.selector" (dict "root" . "component" "buildkit") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {{- include "gj.selector" (dict "root" . "component" "worker-patch") | nindent 14 }}
+{{- end }}
+{{- end }}

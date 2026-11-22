@@ -1,0 +1,124 @@
+{{- range $role := list "sbom" "vuln" "license" "patch" }}
+{{- $w := index $.Values.workers $role }}
+{{- if $w.enabled }}
+{{- $c := dict "root" $ "component" (printf "worker-%s" $role) }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gj.fullname" $ }}-worker-{{ $role }}
+  labels: {{- include "gj.labels" $ | nindent 4 }}
+spec:
+  replicas: {{ if $.Values.keda.enabled }}{{ $.Values.keda.minReplicas }}{{ else }}{{ $w.replicas }}{{ end }}
+  selector:
+    matchLabels: {{- include "gj.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "gj.selector" $c | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        checksum/policy: {{ $.Values.workers.license | toJson | sha256sum }}
+    spec:
+      {{- include "gj.pullSecrets" $ | nindent 6 }}
+      securityContext: {{- include "gj.podSecurity" $ | nindent 8 }}
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: {{ include "gj.image" (dict "root" $ "name" (printf "worker-%s" $role)) }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          env:
+            {{- include "gj.commonEnv" $ | nindent 12 }}
+            - { name: OTEL_SERVICE_NAME, value: "gjallar-worker-{{ $role }}" }
+            - { name: GJALLAR_CONCURRENCY, value: {{ $w.concurrency | quote }} }
+            - { name: HOME, value: /tmp }
+            {{- if $.Values.workers.registryAuthSecret }}
+            - { name: DOCKER_CONFIG, value: /docker }
+            {{- end }}
+            {{- if eq $role "sbom" }}
+            - { name: GJALLAR_SYFT_SOURCE, value: {{ $w.source | quote }} }
+            - { name: GJALLAR_SYFT_SCOPE, value: {{ $w.scope | quote }} }
+            - { name: SYFT_CHECK_FOR_APP_UPDATE, value: "false" }
+            {{- with $w.attest.repositories }}
+            - { name: GJALLAR_ATTEST_REPOS, value: {{ join "," . | quote }} }
+            - { name: GJALLAR_COSIGN_INSECURE, value: {{ $w.attest.insecure | quote }} }
+            {{- if $w.attest.insecure }}
+            - { name: SYFT_REGISTRY_INSECURE_USE_HTTP, value: "true" }
+            {{- end }}
+            - name: COSIGN_PRIVATE_KEY
+              valueFrom: { secretKeyRef: { name: {{ required "workers.sbom.attest.keySecret is required" $w.attest.keySecret }}, key: cosign.key } }
+            - name: COSIGN_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $w.attest.keySecret }}, key: cosign.password } }
+            {{- end }}
+            {{- end }}
+            {{- if eq $role "vuln" }}
+            {{- with include "gj.grypeUrl" $ }}
+            - { name: GRYPE_DB_UPDATE_URL, value: {{ . | quote }} }
+            {{- end }}
+            - { name: GRYPE_DB_CACHE_DIR, value: /tmp/grype-db }
+            - { name: GRYPE_CHECK_FOR_APP_UPDATE, value: "false" }
+            {{- end }}
+            {{- if eq $role "license" }}
+            - { name: GJALLAR_LICENSE_POLICY, value: /etc/gjallar/license-policy.json }
+            {{- if $.Values.workers.license.grantConfig }}
+            - { name: GJALLAR_GRANT_CONFIG, value: /etc/gjallar/grant.yaml }
+            {{- end }}
+            {{- end }}
+            {{- if eq $role "patch" }}
+            - { name: GJALLAR_BUILDKIT_ADDR, value: "tcp://{{ include "gj.fullname" $ }}-buildkit:1234" }
+            - { name: GJALLAR_COPA_TAG_SUFFIX, value: {{ $w.tagSuffix | quote }} }
+            - { name: GJALLAR_COPA_PUSH, value: {{ $w.push | quote }} }
+            - { name: GJALLAR_COPA_TIMEOUT, value: {{ $w.timeout | default "20m" | quote }} }
+            {{- with $w.targetRepository }}
+            - { name: GJALLAR_COPA_TARGET_REPO, value: {{ . | quote }} }
+            {{- end }}
+            - { name: TRIVY_CACHE_DIR, value: /tmp/trivy }
+            {{- with $w.trivyDBRepository }}
+            - { name: TRIVY_DB_REPOSITORY, value: {{ . | quote }} }
+            {{- end }}
+            {{- end }}
+          ports: [{ containerPort: 9090, name: metrics }]
+          livenessProbe: { httpGet: { path: /healthz, port: metrics }, periodSeconds: 30 }
+          securityContext: {{- include "gj.containerSecurity" $ | nindent 12 }}
+          resources: {{- toYaml $w.resources | nindent 12 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: policy, mountPath: /etc/gjallar, readOnly: true }
+            {{- if $.Values.workers.registryAuthSecret }}
+            - { name: docker, mountPath: /docker, readOnly: true }
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 10Gi }
+        - name: policy
+          configMap: { name: {{ include "gj.fullname" $ }}-policy }
+        {{- with $.Values.workers.registryAuthSecret }}
+        - name: docker
+          secret:
+            secretName: {{ . }}
+            items: [{ key: .dockerconfigjson, path: config.json }]
+        {{- end }}
+{{- if $.Values.keda.enabled }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "gj.fullname" $ }}-worker-{{ $role }}
+  labels: {{- include "gj.labels" $ | nindent 4 }}
+spec:
+  scaleTargetRef: { name: {{ include "gj.fullname" $ }}-worker-{{ $role }} }
+  minReplicaCount: {{ $.Values.keda.minReplicas }}
+  maxReplicaCount: {{ $.Values.keda.maxReplicas }}
+  cooldownPeriod: 300
+  triggers:
+    - type: nats-jetstream
+      metadata:
+        natsServerMonitoringEndpoint: "{{ include "gj.fullname" $ }}-nats.{{ $.Release.Namespace }}.svc:8222"
+        account: "$G"
+        stream: GJALLAR_JOBS
+        consumer: worker-{{ $role }}
+        lagThreshold: {{ $.Values.keda.lagThreshold | quote }}
+        activationLagThreshold: "0"   # KEDA activates on lag > threshold; "1" never woke a worker for a single job
+{{- end }}
+{{- end }}
+{{- end }}

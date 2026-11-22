@@ -1,0 +1,34 @@
+{{- if .Values.grypeDB.enabled }}
+{{- $c := dict "root" . "component" "grype-db" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gj.fullname" . }}-grype-db
+  labels: {{- include "gj.labels" . | nindent 4 }}
+spec:
+  selector: {{- include "gj.selector" $c | nindent 4 }}
+  ports: [{ name: http, port: 8080, targetPort: 8080 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gj.fullname" . }}-grype-db
+  labels: {{- include "gj.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- include "gj.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "gj.selector" $c | nindent 8 }}
+    spec:
+      {{- include "gj.pullSecrets" . | nindent 6 }}
+      containers:
+        - name: mirror
+          image: {{ .Values.grypeDB.image }}
+          imagePullPolicy: {{ .Values.grypeDB.pullPolicy }}
+          ports: [{ containerPort: 8080, name: http }]
+          readinessProbe: { tcpSocket: { port: 8080 }, periodSeconds: 10 }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+          resources: {{- toYaml .Values.grypeDB.resources | nindent 12 }}
+{{- end }}

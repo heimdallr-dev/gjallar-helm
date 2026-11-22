@@ -1,0 +1,109 @@
+{{- if .Values.agent.enabled }}
+{{- $c := dict "root" . "component" "agent" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "gj.fullname" . }}-agent
+  labels: {{- include "gj.labels" . | nindent 4 }}
+---
+# Read-only inventory: pods, services, ingresses. No secrets, no writes.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "gj.fullname" . }}-agent
+  labels: {{- include "gj.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods, services]
+    verbs: [get, list]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list]
+  {{- if or .Values.agent.runtime.enabled .Values.agent.regolibrary.enabled }}
+  - apiGroups: [apps]              # Inspektor Gadget's DaemonSet; workload specs for regolibrary
+    resources: [daemonsets, deployments, statefulsets]
+    verbs: [get, list]
+  {{- end }}
+  {{- if .Values.agent.regolibrary.enabled }}
+  - apiGroups: [batch]
+    resources: [cronjobs]
+    verbs: [get, list]
+  {{- end }}
+{{- if .Values.agent.runtime.enabled }}
+---
+# Runtime mode: kubectl-gadget reaches the Inspektor Gadget pods through the API server.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "gj.fullname" . }}-agent-gadget
+  namespace: {{ .Values.agent.runtime.gadgetNamespace }}
+  labels: {{- include "gj.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods/portforward]
+    verbs: [create, get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "gj.fullname" . }}-agent-gadget
+  namespace: {{ .Values.agent.runtime.gadgetNamespace }}
+  labels: {{- include "gj.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ include "gj.fullname" . }}-agent-gadget }
+subjects:
+  - { kind: ServiceAccount, name: {{ include "gj.fullname" . }}-agent, namespace: {{ .Release.Namespace }} }
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "gj.fullname" . }}-agent
+  labels: {{- include "gj.labels" . | nindent 4 }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ include "gj.fullname" . }}-agent }
+subjects:
+  - { kind: ServiceAccount, name: {{ include "gj.fullname" . }}-agent, namespace: {{ .Release.Namespace }} }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gj.fullname" . }}-agent
+  labels: {{- include "gj.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {{- include "gj.selector" $c | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "gj.selector" $c | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      serviceAccountName: {{ include "gj.fullname" . }}-agent
+      {{- include "gj.pullSecrets" . | nindent 6 }}
+      securityContext: {{- include "gj.podSecurity" . | nindent 8 }}
+      containers:
+        - name: agent
+          image: {{ include "gj.image" (dict "root" . "name" "agent") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            {{- include "gj.commonEnv" . | nindent 12 }}
+            - { name: OTEL_SERVICE_NAME, value: gjallar-agent }
+            - { name: GJALLAR_CLUSTER, value: {{ .Values.cluster.name | quote }} }
+            - { name: GJALLAR_INTERVAL, value: {{ .Values.agent.interval | quote }} }
+            - { name: GJALLAR_SKIP_NAMESPACES, value: {{ join "," .Values.agent.skipNamespaces | quote }} }
+            {{- if .Values.agent.regolibrary.enabled }}
+            - { name: GJALLAR_REGOLIBRARY, value: /usr/local/share/regolibrary }
+            {{- end }}
+            {{- if .Values.agent.runtime.enabled }}
+            - { name: GJALLAR_RUNTIME_GADGET, value: "true" }
+            - { name: GJALLAR_GADGET_IMAGE, value: {{ .Values.agent.runtime.gadget | quote }} }
+            - { name: GJALLAR_RUNTIME_FLUSH, value: {{ .Values.agent.runtime.flush | quote }} }
+            - { name: HOME, value: /tmp }
+            {{- end }}
+          ports: [{ containerPort: 9090, name: metrics }]
+          securityContext: {{- include "gj.containerSecurity" . | nindent 12 }}
+          resources: {{- toYaml (ternary .Values.agent.runtime.resources .Values.agent.resources (or .Values.agent.runtime.enabled .Values.agent.regolibrary.enabled)) | nindent 12 }}
+          volumeMounts: [{ name: tmp, mountPath: /tmp }]   # OPA bundle, kubectl-gadget cache
+      volumes: [{ name: tmp, emptyDir: { sizeLimit: 256Mi } }]
+{{- end }}

@@ -1,0 +1,24 @@
+ᚷ Gjallar {{ .Chart.AppVersion }} is installed in namespace {{ .Release.Namespace }}.
+
+Open the UI:
+{{- if .Values.ingress.enabled }}
+  https://{{ .Values.ingress.web.host }}
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "gj.fullname" . }}-web 8083:8083
+  then browse http://localhost:8083
+{{- end }}
+
+CLI against the hub:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "gj.fullname" . }}-api 8080:8080
+  GJALLAR_URL=http://localhost:8080 gjallar summary
+
+{{- if not .Values.auth.issuer }}
+
+WARNING: auth.issuer is empty, so authentication is DISABLED. Set auth.issuer
+to your Keycloak realm before exposing Gjallar outside the cluster.
+{{- end }}
+
+The agent reports every {{ .Values.agent.interval }}; first findings appear once
+Syft and Grype have processed the discovered images (minutes, depending on
+image count). Watch progress:
+  kubectl -n {{ .Release.Namespace }} logs deploy/{{ include "gj.fullname" . }}-api -f

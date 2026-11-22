@@ -1,0 +1,13 @@
+apiVersion: v2
+name: gjallar
+description: Gjallar — Kubernetes vulnerability, license and posture platform that ranks findings by real risk.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords: [security, sbom, vulnerability, syft, grype, grant, copa, kubernetes]
+home: https://github.com/heimdallr-dev/gjallar
+sources: [https://github.com/heimdallr-dev/gjallar, https://github.com/heimdallr-dev/gjallar-helm]
+maintainers:
+  - name: Carl
+annotations:
+  artifacthub.io/license: Apache-2.0

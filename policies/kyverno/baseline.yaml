@@ -1,0 +1,36 @@
+# Admission-time versions of Gjallar's posture checks GJ-001 and GJ-007.
+# Gjallar reports what is already running; these stop new drift.
+# Kyverno >= 1.16 (CEL ValidatingPolicy). Pod rules are auto-generated for
+# Deployments, StatefulSets, Jobs etc. (autogen).
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: gjallar-baseline
+  annotations:
+    policies.kyverno.io/title: Gjallar baseline (privileged, mutable tags)
+spec:
+  validationActions: [Audit]
+  failurePolicy: Ignore        # the default (Fail) blocks every pod change in the cluster while Kyverno is down
+  evaluation:
+    background: { enabled: true }
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  matchConditions:
+    - name: skip-kube-system
+      expression: "object.metadata.namespace != 'kube-system'"
+  variables:
+    - name: all
+      expression: >-
+        object.spec.containers +
+        (has(object.spec.initContainers) ? object.spec.initContainers : [])
+  validations:
+    - expression: >-
+        variables.all.all(c, !has(c.securityContext) || !has(c.securityContext.privileged) || c.securityContext.privileged == false)
+      message: "GJ-001: privileged containers are not allowed."
+    - expression: >-
+        object.spec.containers.all(c, !c.image.endsWith(':latest') && (c.image.contains('@') || c.image.matches(':[^/]+$')))
+      message: "GJ-007: pin images by tag or digest; ':latest' and untagged images are mutable."
