@@ -9,6 +9,8 @@ imagePullSecrets: []
 cluster:
   name: homelab                # label for this cluster in findings
 
+storageClass: ""               # for every PVC (NATS, Postgres, analytics); empty = cluster default. Per-component values win
+
 # ---- Identity (Keycloak) ------------------------------------------------
 auth:
   # Empty issuer = authentication DISABLED (dev only).
@@ -175,6 +177,7 @@ analytics:
 # ---- Interfaces ------------------------------------------------------------
 web:
   enabled: true
+  tag: ""                      # gjallar-web is released from its own repo; empty = image.tag / appVersion
   resources: { requests: { cpu: 10m, memory: 32Mi }, limits: { memory: 128Mi } }
 mcp:
   enabled: true

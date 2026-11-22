@@ -16,7 +16,7 @@ app.kubernetes.io/component: {{ .component }}
 
 {{/* image: (dict "root" . "name" "api") */}}
 {{- define "gj.image" -}}
-{{ .root.Values.image.registry }}/gjallar-{{ .name }}:{{ .root.Values.image.tag | default .root.Chart.AppVersion }}
+{{ .root.Values.image.registry }}/gjallar-{{ .name }}:{{ .tag | default .root.Values.image.tag | default .root.Chart.AppVersion }}
 {{- end -}}
 
 {{- define "gj.natsUrl" -}}

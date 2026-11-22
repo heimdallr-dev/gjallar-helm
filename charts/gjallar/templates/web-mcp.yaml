@@ -30,7 +30,7 @@ spec:
       securityContext: {{- include "gj.podSecurity" $ | nindent 8 }}
       containers:
         - name: {{ $name }}
-          image: {{ include "gj.image" (dict "root" $ "name" $name) }}
+          image: {{ include "gj.image" (dict "root" $ "name" $name "tag" (index $.Values $name).tag) }}
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
           env:
             - { name: GJALLAR_API_URL, value: "http://{{ include "gj.fullname" $ }}-api:8080" }

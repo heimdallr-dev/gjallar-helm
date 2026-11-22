@@ -11,7 +11,7 @@ metadata:
   labels: {{- include "gj.labels" . | nindent 4 }}
 spec:
   accessModes: [ReadWriteOnce]
-  {{- with .Values.analytics.storageClass }}
+  {{- with .Values.analytics.storageClass | default .Values.storageClass }}
   storageClassName: {{ . }}
   {{- end }}
   resources: { requests: { storage: {{ .Values.analytics.storage }} } }
