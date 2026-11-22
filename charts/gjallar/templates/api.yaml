@@ -54,6 +54,11 @@ spec:
             - name: GJALLAR_NOTIFY
               valueFrom: { secretKeyRef: { name: {{ . }}, key: {{ $.Values.notify.secretKey }} } }
             {{- end }}
+            {{- with .Values.export.dependencyTrack }}{{ if .url }}
+            - { name: GJALLAR_DTRACK_URL, value: {{ .url | quote }} }
+            - name: GJALLAR_DTRACK_API_KEY
+              valueFrom: { secretKeyRef: { name: {{ required "export.dependencyTrack.existingSecret is required" .existingSecret }}, key: api-key } }
+            {{- end }}{{ end }}
             {{- with .Values.notify.publicUrl }}
             - { name: GJALLAR_PUBLIC_URL, value: {{ . | quote }} }
             {{- end }}

@@ -57,6 +57,15 @@ spec:
             {{- end }}
             - { name: GRYPE_DB_CACHE_DIR, value: /tmp/grype-db }
             - { name: GRYPE_CHECK_FOR_APP_UPDATE, value: "false" }
+            - { name: GJALLAR_MATCHER, value: {{ $w.matcher | default "grype" | quote }} }
+            - { name: TRIVY_CACHE_DIR, value: /tmp/trivy }
+            {{- with $.Values.workers.patch.trivyDBRepository }}
+            - { name: TRIVY_DB_REPOSITORY, value: {{ . | quote }} }
+            {{- end }}
+            {{- if $w.osv }}
+            - { name: GJALLAR_OSV, value: "true" }          # offline OSV second source
+            - { name: GJALLAR_OSV_CACHE, value: /tmp/osv-db }
+            {{- end }}
             {{- end }}
             {{- if eq $role "license" }}
             - { name: GJALLAR_LICENSE_POLICY, value: /etc/gjallar/license-policy.json }
