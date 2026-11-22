@@ -11,13 +11,14 @@ Helm chart, admission policies and identity setup for
 | `policies/kyverno` | Kyverno ≥ 1.16 `ValidatingPolicy`: admission gate (urgent / known-exploited images) and baseline. Audit mode and `failurePolicy: Ignore` by default. Using OPA, Conftest or Gatekeeper instead? See [gjallar-opa](https://github.com/heimdallr-dev/gjallar-opa) |
 | `keycloak/gjallar-realm.json` | Realm with roles, groups claim and audience; works as a template for any OIDC provider |
 | `keycloak/keycloak-dev.yaml` | Throwaway dev Keycloak for local clusters (not for production) |
+| `keycloak/import-realm.sh` | Import the realm into a Keycloak already in your cluster; users get random temporary passwords (Secret `gjallar/gjallar-initial-users`) |
 
 ## Install
 
 ```bash
 # released chart (signed OCI artifact)
-helm install gjallar oci://ghcr.io/heimdallr-dev/charts/gjallar --version 0.1.0 -n gjallar --create-namespace -f my-values.yaml
-cosign verify ghcr.io/heimdallr-dev/charts/gjallar:0.1.0 \
+helm install gjallar oci://ghcr.io/heimdallr-dev/charts/gjallar --version 0.3.1 -n gjallar --create-namespace -f my-values.yaml
+cosign verify ghcr.io/heimdallr-dev/charts/gjallar:0.3.1 \
   --certificate-identity-regexp 'https://github.com/heimdallr-dev/gjallar-helm/.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
